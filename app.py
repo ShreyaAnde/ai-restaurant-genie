@@ -1,4 +1,3 @@
-# app.py
 import streamlit as st
 import os
 from dotenv import load_dotenv
@@ -10,16 +9,20 @@ from langchain.chains import ConversationalRetrievalChain
 from langchain.prompts import PromptTemplate
 from langchain.llms.base import LLM
 from pydantic import Field
+from groq import Groq
+
 
 # -----------------------
-# Load API Key
+# Load API Key (Local + Cloud Safe)
 # -----------------------
 load_dotenv()
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-if not GROQ_API_KEY:
-    st.error("❌ GROQ_API_KEY not found in .env file")
+groq_api_key = os.getenv("GROQ_API_KEY") or st.secrets.get("GROQ_API_KEY")
+
+if not groq_api_key:
+    st.error("❌ GROQ_API_KEY not found in environment or Streamlit secrets")
     st.stop()
+
 
 # -----------------------
 # Page Config
@@ -28,29 +31,28 @@ st.set_page_config(page_title="AI Restaurant Generator", page_icon="🍽️")
 st.title("🍽️ AI Restaurant Branding Generator")
 st.write("Generate unique restaurant ideas using AI + RAG")
 
-# -----------------------
-# Groq LLM Wrapper (Pydantic-safe)
-# -----------------------
-from groq import Groq
 
-groq_client = Groq(api_key=GROQ_API_KEY)
+# -----------------------
+# Groq LLM Wrapper
+# -----------------------
+groq_client = Groq(api_key=groq_api_key)
+
 
 class GroqLLM(LLM):
     """LangChain wrapper for Groq Chat LLM"""
 
     client: object = Field(..., description="Groq client instance")
-    model_name: str = Field(default="openai/gpt-oss-20b", description="Groq model name")
-    temperature: float = Field(default=0.7, description="Temperature for generation")
+    model_name: str = Field(default="llama3-70b-8192")
+    temperature: float = Field(default=0.7)
 
     class Config:
-        arbitrary_types_allowed = True  # allow client to be any object
+        arbitrary_types_allowed = True
 
     @property
     def _llm_type(self) -> str:
         return "groq"
 
     def _call(self, prompt: str, stop=None) -> str:
-        """Call Groq Chat Completion API and return text"""
         response = self.client.chat.completions.create(
             messages=[
                 {"role": "system", "content": "You are a restaurant branding expert."},
@@ -61,12 +63,14 @@ class GroqLLM(LLM):
         )
         return response.choices[0].message.content
 
+
 # Initialize LLM
 llm = GroqLLM(
     client=groq_client,
-    model_name="openai/gpt-oss-20b",
+    model_name="llama3-70b-8192",
     temperature=0.7
 )
+
 
 # -----------------------
 # Embedding Model
@@ -74,6 +78,7 @@ llm = GroqLLM(
 embeddings = HuggingFaceEmbeddings(
     model_name="sentence-transformers/all-MiniLM-L6-v2"
 )
+
 
 # -----------------------
 # Cuisine Knowledge Base
@@ -89,19 +94,21 @@ cuisine_docs = [
     "Greek cuisine includes feta cheese, olives, grilled meats and fresh vegetables."
 ]
 
+
 # -----------------------
-# Cache Vector Store
+# Cache Vector Store (Cloud Safe)
 # -----------------------
 @st.cache_resource
 def load_vectorstore():
     return Chroma.from_texts(
         cuisine_docs,
-        embedding=embeddings,
-        persist_directory="./restaurant_db"
+        embedding=embeddings
     )
+
 
 vectorstore = load_vectorstore()
 retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
+
 
 # -----------------------
 # Session Memory
@@ -112,8 +119,9 @@ if "memory" not in st.session_state:
         return_messages=True
     )
 
+
 # -----------------------
-# Custom Prompt
+# Custom Prompt Template
 # -----------------------
 template = """
 You are a restaurant branding expert.
@@ -139,6 +147,7 @@ prompt = PromptTemplate(
     input_variables=["context", "question"]
 )
 
+
 # -----------------------
 # RAG Chain
 # -----------------------
@@ -149,8 +158,9 @@ qa_chain = ConversationalRetrievalChain.from_llm(
     combine_docs_chain_kwargs={"prompt": prompt}
 )
 
+
 # -----------------------
-# Chat UI
+# Chat Interface
 # -----------------------
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
@@ -159,6 +169,9 @@ user_input = st.chat_input("Tell me what type of restaurant you want...")
 
 if user_input:
     st.chat_message("user").write(user_input)
-    response = qa_chain.invoke({"question": user_input})
-    answer = response["answer"]
+
+    with st.spinner("Generating restaurant concept..."):
+        response = qa_chain.invoke({"question": user_input})
+        answer = response["answer"]
+
     st.chat_message("assistant").write(answer)
